@@ -14,7 +14,7 @@ export default function PacienteForm() {
 
   useEffect(() => {
     if (id) {
-      loadPaciente();
+      void loadPaciente();
     }
   }, [id]);
 

@@ -38,7 +38,7 @@ export default function ExamenDetalle() {
   const [openDelete, setOpenDelete] = useState(false);
 
   useEffect(() => {
-    loadExamen();
+    void loadExamen();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -95,7 +95,7 @@ export default function ExamenDetalle() {
       });
       toast.success("Documento subido exitosamente");
       setOpenUpload(false);
-      loadExamen();
+      void loadExamen();
     } catch {
       toast.error("Error al subir documento");
     } finally {
@@ -304,7 +304,7 @@ export default function ExamenDetalle() {
                             try {
                               await api.delete(`/documentos/${doc.id}`);
                               toast.success("Documento eliminado");
-                              loadExamen();
+                              void loadExamen();
                             } catch {
                               // El error ya se maneja en el interceptor
                             }

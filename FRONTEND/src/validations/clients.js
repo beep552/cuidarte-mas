@@ -95,8 +95,8 @@ export const clienteSchema = yup.object().shape({
     .required("El día de pago es requerido")
     .test("is-valid-day", "El día de pago debe estar entre 1 y 31", (value) => {
       if (!value) return false;
-      const day = parseInt(value, 10);
-      return !isNaN(day) && day >= 1 && day <= 31;
+      const day = Number.parseInt(value, 10);
+      return !Number.isNaN(day) && day >= 1 && day <= 31;
     }),
   moneda: yup
     .string()

@@ -46,7 +46,7 @@ export default function ExamenesList() {
   useEffect(() => {
     const editId = searchParams.get("edit");
     if (editId) {
-      setEditingExamenId(parseInt(editId));
+      setEditingExamenId(Number.parseInt(editId, 10));
       setTabValue(1);
       // Limpiar el parámetro de la URL
       setSearchParams({});

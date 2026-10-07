@@ -120,7 +120,7 @@ export default function ExamenForm({ onSuccess, examenId }) {
         notas: data.notas || "",
       });
       // Cargar documentos del examen
-      loadDocumentos();
+      void loadDocumentos();
     } catch (error) {
       console.error("Error al cargar examen:", error);
     }
@@ -154,7 +154,7 @@ export default function ExamenForm({ onSuccess, examenId }) {
       toast.success("Documento subido exitosamente");
       setPendingFiles([]);
       if (examenIdToUse) {
-        loadDocumentos();
+        void loadDocumentos();
       }
     } catch {
       toast.error("Error al subir documento");
@@ -191,7 +191,7 @@ export default function ExamenForm({ onSuccess, examenId }) {
     try {
       await api.delete(`/documentos/${documentoId}`);
       toast.success("Documento eliminado");
-      loadDocumentos();
+      void loadDocumentos();
     } catch {
       // El error ya se maneja en el interceptor
     }
@@ -230,7 +230,7 @@ export default function ExamenForm({ onSuccess, examenId }) {
         },
       });
       toast.success("Documento subido exitosamente");
-      loadDocumentos();
+      void loadDocumentos();
     } catch {
       toast.error("Error al subir documento");
     } finally {
@@ -254,9 +254,9 @@ export default function ExamenForm({ onSuccess, examenId }) {
   });
 
   useEffect(() => {
-    loadData();
+    void loadData();
     if (examenId) {
-      loadExamen();
+      void loadExamen();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examenId]);

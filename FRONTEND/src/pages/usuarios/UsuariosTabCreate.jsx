@@ -95,7 +95,7 @@ export default function UsuariosTabCreate({ onSuccess, onLoad }) {
         console.error("Error al cargar roles:", error);
       }
     };
-    loadRoles();
+    void loadRoles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

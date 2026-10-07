@@ -26,7 +26,7 @@ export default function MisResultados() {
   const { user } = useAuth();
 
   useEffect(() => {
-    loadExamenes();
+    void loadExamenes();
   }, []);
 
   const loadExamenes = async () => {

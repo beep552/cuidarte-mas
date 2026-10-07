@@ -180,7 +180,7 @@ router.get("/:id", async (req, res) => {
           [authUser.empresaId]
         );
         usuario.es_unico_administrador =
-          parseInt(adminCount.rows[0].count) === 1;
+          Number.parseInt(adminCount.rows[0].count, 10) === 1;
       } else {
         usuario.es_unico_administrador = false;
       }
@@ -343,7 +343,7 @@ async function updateUsuarioEmpresa(
           [authUser.empresaId]
         );
 
-        if (parseInt(adminCount.rows[0].count) === 1 && rol_id !== 1) {
+        if (Number.parseInt(adminCount.rows[0].count, 10) === 1 && rol_id !== 1) {
           return res.status(400).json({
             error: "No se puede cambiar el rol",
             glosa:
