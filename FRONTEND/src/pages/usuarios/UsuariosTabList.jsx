@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { esRolAdmin } from "../../utils/roles";
 import {
   IconButton,
   Stack,
@@ -105,15 +106,14 @@ export default function UsuariosTabList({ items, onDelete }) {
         enableSorting: false,
         enableColumnActions: false,
         Cell: ({ row }) => {
-          // Verificar si es administrador (puede ser "admin" o "administrador")
-          const esAdmin = role === "admin" || role === "administrador";
-          
-          // Los administradores pueden editar cualquier usuario
-          // Los editores solo pueden editar su propio usuario
+          // HAL-35: se centraliza el chequeo de admin (acepta "admin" y "administrador")
+          const esAdmin = esRolAdmin(role);
+
+          // Los administradores pueden editar cualquier usuario;
+          // cualquier otro rol solo su propio usuario.
           const puedeEditar =
             esAdmin ||
-            (role === "editor" &&
-              user?.usuarioId &&
+            (user?.usuarioId &&
               Number(user.usuarioId) === Number(row.original.id));
 
           return (

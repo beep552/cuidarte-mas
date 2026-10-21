@@ -84,7 +84,7 @@ export default function ExamenDetalle() {
     const formData = new FormData();
     formData.append("documento", acceptedFiles[0]);
     formData.append("examen_medico_id", examen.id);
-    formData.append("paciente_id", examen.paciente_id);
+    // HAL-22: el backend deriva paciente_id del examen; no se envía del cliente.
 
     setUploading(true);
     try {
@@ -96,8 +96,12 @@ export default function ExamenDetalle() {
       toast.success("Documento subido exitosamente");
       setOpenUpload(false);
       void loadExamen();
-    } catch {
-      toast.error("Error al subir documento");
+    } catch (error) {
+      // HAL-26: mostrar el mensaje de error específico devuelto por el
+      // backend (tamaño, tipo o estado del examen) en lugar de uno genérico.
+      const mensaje =
+        error?.response?.data?.message || "Error al subir documento";
+      toast.error(mensaje);
     } finally {
       setUploading(false);
     }
@@ -111,6 +115,25 @@ export default function ExamenDetalle() {
       "image/png": [".png"],
     },
     multiple: false,
+    // HAL-18/26: limitar tamaño (10 MB, mismo límite que el backend) y
+    // cantidad de archivos antes de intentar subirlos.
+    maxSize: 10 * 1024 * 1024,
+    maxFiles: 1,
+    onDropRejected: (fileRejections) => {
+      const rejection = fileRejections[0];
+      const errors = rejection?.errors ?? [];
+      const esTamano = errors.some((e) => e.code === "file-too-large");
+      const esTipo = errors.some((e) => e.code === "file-invalid-type");
+      if (esTamano) {
+        toast.error("El archivo no puede exceder 10 MB");
+      } else if (esTipo) {
+        toast.error("Formato no permitido. Solo PDF, JPG/JPEG o PNG");
+      } else {
+        toast.error(
+          errors.map((e) => e.message).join(". ") || "Archivo rechazado"
+        );
+      }
+    },
   });
 
   if (loading) {

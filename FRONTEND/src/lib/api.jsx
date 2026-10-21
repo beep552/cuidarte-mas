@@ -20,16 +20,16 @@ api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token')
     const url = config.url || ''
-    
+
     // Rutas públicas que no requieren token
     const isLogin = url.includes('/autenticacion/login')
     // El registro es POST a /empresas cuando no hay token (usuario nuevo)
-    const isRegister = url.includes('/empresas') && 
-                       config.method?.toLowerCase() === 'post' && 
+    const isRegister = url.includes('/empresas') &&
+                       config.method?.toLowerCase() === 'post' &&
                        !token
     // Rutas públicas de contratos compartidos
     const isPublicContract = url.includes('/public/contratos')
-    
+
     // Si no es login, registro ni ruta pública, agregar el token si existe
     if (!isLogin && !isRegister && !isPublicContract && token) {
       config.headers.Authorization = `Bearer ${token}`
@@ -42,17 +42,43 @@ api.interceptors.request.use(
   }
 )
 
+/**
+ * HAL-38: manejo central de sesiones vencidas.
+ * Un 401 fuera del login limpia el estado local y redirige a /login con
+ * aviso de expiración, una sola vez (evita bucles con múltiples 401
+ * simultáneos). Un 403 se mantiene como toast de "sin permiso" sin logout.
+ */
+function finalizarSesionExpired() {
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  delete api.defaults.headers.common.Authorization
+  if (!window.location.pathname.startsWith('/login')) {
+    window.location.assign('/login?expired=1')
+  }
+}
+
 // Interceptor para manejar errores y mostrar toasts
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    // Si hay respuesta del servidor
+    const isLoginRequest = typeof error.config?.url === 'string' &&
+      error.config.url.includes('/autenticacion/login')
+
+    // HAL-38: sesión inválida/expirada -> limpieza y redirección única.
+    if (error.response?.status === 401 && !isLoginRequest) {
+      finalizarSesionExpired()
+      toast.error('La sesión ha expirado', {
+        description: 'Vuelve a iniciar sesión para continuar.',
+        duration: 5000,
+      })
+      return Promise.reject(error)
+    }
+
     if (error.response) {
       const { data } = error.response
-      
+
       // Si el error tiene el formato esperado { error, glosa }
       if (data && data.error && data.glosa) {
-        // Mostrar toast con título y descripción
         toast.error(data.error, {
           description: data.glosa,
           duration: 5000,
@@ -81,5 +107,3 @@ api.interceptors.response.use(
     return Promise.reject(error)
   }
 )
-
-

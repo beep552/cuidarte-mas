@@ -17,17 +17,26 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import EmailIcon from "@mui/icons-material/Email";
 import PhoneIcon from "@mui/icons-material/Phone";
-import { useAuth } from "../../hooks/useAuth";
 import { useNavigate } from "react-router-dom";
+import { formatDateOnly } from "../../utils/formatDateOnly";
+
+/** HAL-37: nombre completo construido desde los campos reales del modelo. */
+function nombreCompletoPaciente(paciente) {
+  const partes = [
+    paciente?.primer_nombre,
+    paciente?.apellido_paterno,
+    paciente?.apellido_materno,
+  ].filter(Boolean);
+  return partes.length > 0 ? partes.join(" ") : "sin datos de nombres";
+}
 
 export default function PacientesTabList({ items, onDelete }) {
-  const { role } = useAuth();
   const navigate = useNavigate();
   const [openDeleteDialog, setOpenDeleteDialog] = useState(false);
   const [pacienteToDelete, setPacienteToDelete] = useState(null);
 
-  const handleDeleteClick = useCallback((id, nombrePaciente) => {
-    setPacienteToDelete({ id, nombrePaciente });
+  const handleDeleteClick = useCallback((id, nombrePaciente, rut) => {
+    setPacienteToDelete({ id, nombrePaciente, rut });
     setOpenDeleteDialog(true);
   }, []);
 
@@ -108,8 +117,7 @@ export default function PacientesTabList({ items, onDelete }) {
         header: "Fecha de Nacimiento",
         size: 150,
         Cell: ({ row }) => {
-          const fecha = row.original.fecha_nacimiento;
-          return fecha ? new Date(fecha).toLocaleDateString("es-CL") : "-";
+          return formatDateOnly(row.original.fecha_nacimiento);
         },
       },
       {
@@ -139,7 +147,7 @@ export default function PacientesTabList({ items, onDelete }) {
               size="small"
               data-testid={`button-cliente-eliminar-${row.original.id}`}
               onClick={() =>
-                handleDeleteClick(row.original.id, row.original.nombre)
+                handleDeleteClick(row.original.id, nombreCompletoPaciente(row.original), row.original.rut)
               }
               sx={{
                 "&:hover": {
@@ -153,7 +161,7 @@ export default function PacientesTabList({ items, onDelete }) {
         ),
       },
     ],
-    []
+    [handleDeleteClick, navigate]
   );
 
   return (
@@ -253,7 +261,8 @@ export default function PacientesTabList({ items, onDelete }) {
         <DialogContent>
           <DialogContentText>
             ¿Estás seguro de que deseas eliminar al paciente{" "}
-            <strong>{pacienteToDelete?.nombrePaciente}</strong>? Esta acción no
+            <strong>{pacienteToDelete?.nombrePaciente}</strong>
+            {pacienteToDelete?.rut ? ` (RUT: ${pacienteToDelete.rut})` : ""}? Esta acción no
             se puede deshacer.
           </DialogContentText>
         </DialogContent>

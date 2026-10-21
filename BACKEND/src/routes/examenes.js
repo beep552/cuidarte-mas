@@ -1,59 +1,21 @@
 const express = require("express");
 const { pool } = require("../db");
-const jwt = require("jsonwebtoken");
 const validate = require("../middleware/validate");
 const delayMiddleware = require("../middleware/delay");
+const { requireAuth } = require("../middleware/auth");
 const { examenMedicoSchema, updateExamenMedicoSchema } = require("../validations/examenes");
+const { registrarAuditoria } = require("../utils/auditoria");
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || "inseguro";
 
-function getUserFromAuthHeader(req) {
-  const auth = req.headers.authorization || "";
-  if (!auth.startsWith("Bearer ")) return null;
+/**
+ * Migrada al middleware central requireAuth (HAL-01/04/06/07: autorización
+ * coherente) y a transacciones para inserción/actualización + auditoría
+ * (HAL-15). HAL-29: el retardo de 5 s es un simulador activable por
+ * entorno; por defecto no aplica.
+ */
+
+router.post("/", delayMiddleware(5000), requireAuth({ roles: ["medico", "admin"] }), validate(examenMedicoSchema), async (req, res, next) => {
   try {
-    const token = auth.substring(7);
-    return jwt.verify(token, JWT_SECRET);
-  } catch {
-    return null;
-  }
-}
-
-function requireRole(req, allowedRoles) {
-  const authUser = getUserFromAuthHeader(req);
-  if (!authUser) {
-    return Promise.resolve({ error: "No autorizado", status: 401 });
-  }
-  
-  return pool.query(
-    `SELECT r.nombre 
-     FROM usuario_roles ur
-     JOIN roles r ON r.id = ur.rol_id
-     WHERE ur.usuario_id = $1`,
-    [authUser.usuarioId]
-  ).then(result => {
-    const userRoles = result.rows.map(r => r.nombre);
-    const hasRole = allowedRoles.some(role => userRoles.includes(role));
-    if (!hasRole) {
-      return { error: "No autorizado", status: 403 };
-    }
-    return { authUser, userRoles };
-  }).catch(err => {
-    return { error: "Error al verificar roles", status: 500 };
-  });
-}
-
-// Crear examen médico (solo médico y admin)
-router.post("/", delayMiddleware(5000), validate(examenMedicoSchema), async (req, res) => {
-  try {
-    const authCheck = await requireRole(req, ["medico", "admin"]);
-    if (authCheck.error) {
-      return res.status(authCheck.status).json({
-        error: authCheck.error,
-        glosa: "No tiene permisos para realizar esta acción",
-      });
-    }
-    const { authUser } = authCheck;
-
     const {
       tipo_examen_medico_id,
       paciente_id,
@@ -63,70 +25,51 @@ router.post("/", delayMiddleware(5000), validate(examenMedicoSchema), async (req
       notas,
     } = req.body;
 
-    const result = await pool.query(
-      `INSERT INTO examen_medico (
-        tipo_examen_medico_id, paciente_id, diagnosis, tratamiento, observaciones, notas
-      ) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [
-        tipo_examen_medico_id,
-        paciente_id,
-        diagnosis || null,
-        tratamiento || null,
-        observaciones || null,
-        notas || null,
-      ]
-    );
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
 
-    await pool.query(
-      "INSERT INTO auditoria (usuario_id, accion) VALUES ($1, $2)",
-      [
-        authUser?.usuarioId || null,
-        `EXAMENES_CREAR: creó examen médico ID ${result.rows[0].id} para paciente ID ${paciente_id}`,
-      ]
-    );
+      const result = await client.query(
+        `INSERT INTO examen_medico (
+          tipo_examen_medico_id, paciente_id, diagnosis, tratamiento, observaciones, notas
+        ) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [
+          tipo_examen_medico_id,
+          paciente_id,
+          diagnosis || null,
+          tratamiento || null,
+          observaciones || null,
+          notas || null,
+        ]
+      );
 
-    res.status(201).json(result.rows[0]);
+      await registrarAuditoria(
+        {
+          usuarioId: req.sesion.token.usuarioId,
+          accion: "EXAMENES_CREAR",
+          recurso: `examenes/${result.rows[0].id}`,
+          detalle: `para paciente ${paciente_id}`,
+        },
+        client
+      );
+
+      await client.query("COMMIT");
+      res.status(201).json(result.rows[0]);
+    } catch (txError) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw txError;
+    } finally {
+      client.release();
+    }
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al crear examen médico",
-      glosa: err.message || err.toString(),
-    });
+    next(err);
   }
 });
 
-// Listar exámenes médicos (médico, admin y paciente)
-router.get("/", delayMiddleware(5000), async (req, res) => {
+router.get("/", delayMiddleware(5000), requireAuth(), async (req, res, next) => {
   try {
-    const authUser = getUserFromAuthHeader(req);
-    if (!authUser) {
-      return res.status(401).json({
-        error: "No autorizado",
-        glosa: "Token inválido",
-      });
-    }
-
-    // Obtener roles del usuario
-    const userRolesResult = await pool.query(
-      `SELECT r.nombre 
-       FROM usuario_roles ur
-       JOIN roles r ON r.id = ur.rol_id
-       WHERE ur.usuario_id = $1`,
-      [authUser.usuarioId]
-    );
-    const userRoles = userRolesResult.rows.map(r => r.nombre);
-
-    // Verificar que tenga un rol válido
-    const validRoles = ["medico", "admin", "paciente"];
-    if (!userRoles.some(role => validRoles.includes(role))) {
-      return res.status(403).json({
-        error: "No autorizado",
-        glosa: "No tiene permisos para realizar esta acción",
-      });
-    }
-
     let query = `
-      SELECT 
+      SELECT
         em.*,
         tem.nombre AS tipo_examen_nombre,
         p.rut AS paciente_rut,
@@ -138,75 +81,37 @@ router.get("/", delayMiddleware(5000), async (req, res) => {
        JOIN pacientes p ON p.id = em.paciente_id
     `;
     const queryParams = [];
-    let paramIndex = 1;
 
-    // Si es paciente, filtrar solo sus exámenes
-    if (userRoles.includes("paciente") && !userRoles.includes("medico") && !userRoles.includes("admin")) {
-      // Obtener el paciente_id del usuario
+    // El paciente sólo ve exámenes de su propia ficha (authorization desde BD).
+    if (req.sesion.esPaciente) {
       const pacienteResult = await pool.query(
         "SELECT id FROM pacientes WHERE usuario_id = $1",
-        [authUser.usuarioId]
+        [req.sesion.token.usuarioId]
       );
-
       if (pacienteResult.rows.length === 0) {
         return res.status(404).json({
           error: "Paciente no encontrado",
           glosa: "No se encontró información de paciente asociada a su cuenta",
         });
       }
-
-      const pacienteId = pacienteResult.rows[0].id;
-      query += ` WHERE em.paciente_id = $${paramIndex}`;
-      queryParams.push(pacienteId);
-      paramIndex++;
+      query += " WHERE em.paciente_id = $1";
+      queryParams.push(pacienteResult.rows[0].id);
     }
 
-    query += ` ORDER BY em.created_at DESC`;
+    query += " ORDER BY em.created_at DESC";
 
     const result = await pool.query(query, queryParams);
 
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al listar exámenes médicos",
-      glosa: err.message || err.toString(),
-    });
+    next(err);
   }
 });
 
-// Obtener examen médico por ID (médico, admin y paciente)
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireAuth(), async (req, res, next) => {
   try {
-    const authUser = getUserFromAuthHeader(req);
-    if (!authUser) {
-      return res.status(401).json({
-        error: "No autorizado",
-        glosa: "Token inválido",
-      });
-    }
-
-    // Obtener roles del usuario
-    const userRolesResult = await pool.query(
-      `SELECT r.nombre 
-       FROM usuario_roles ur
-       JOIN roles r ON r.id = ur.rol_id
-       WHERE ur.usuario_id = $1`,
-      [authUser.usuarioId]
-    );
-    const userRoles = userRolesResult.rows.map(r => r.nombre);
-
-    // Verificar que tenga un rol válido
-    const validRoles = ["medico", "admin", "paciente"];
-    if (!userRoles.some(role => validRoles.includes(role))) {
-      return res.status(403).json({
-        error: "No autorizado",
-        glosa: "No tiene permisos para realizar esta acción",
-      });
-    }
-
     let query = `
-      SELECT 
+      SELECT
         em.*,
         tem.nombre AS tipo_examen_nombre,
         p.rut AS paciente_rut,
@@ -220,88 +125,55 @@ router.get("/:id", async (req, res) => {
     `;
     const queryParams = [req.params.id];
 
-    // Si es paciente, verificar que el examen pertenezca a su paciente_id
-    if (userRoles.includes("paciente") && !userRoles.includes("medico") && !userRoles.includes("admin")) {
-      // Obtener el paciente_id del usuario
+    if (req.sesion.esPaciente) {
       const pacienteResult = await pool.query(
         "SELECT id FROM pacientes WHERE usuario_id = $1",
-        [authUser.usuarioId]
+        [req.sesion.token.usuarioId]
       );
-
       if (pacienteResult.rows.length === 0) {
         return res.status(404).json({
           error: "Paciente no encontrado",
           glosa: "No se encontró información de paciente asociada a su cuenta",
         });
       }
-
-      const pacienteId = pacienteResult.rows[0].id;
-      query += ` AND em.paciente_id = $2`;
-      queryParams.push(pacienteId);
+      query += " AND em.paciente_id = $2";
+      queryParams.push(pacienteResult.rows[0].id);
     }
 
     const result = await pool.query(query, queryParams);
 
     if (result.rows.length === 0)
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: "No encontrado",
-        glosa: "El examen no existe o no tiene permisos para verlo"
+        glosa: "El examen no existe o no tiene permisos para verlo",
       });
 
     res.json(result.rows[0]);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al obtener examen médico",
-      glosa: err.message || err.toString(),
-    });
+    next(err);
   }
 });
 
-// Obtener exámenes médicos por paciente (médico, admin y paciente)
-router.get("/paciente/:paciente_id", async (req, res) => {
+router.get("/paciente/:paciente_id", requireAuth(), async (req, res, next) => {
   try {
-    const authUser = getUserFromAuthHeader(req);
-    
-    // Si es paciente, verificar que el paciente_id coincida con su usuario
-    if (authUser) {
-      const userRolesResult = await pool.query(
-        `SELECT r.nombre 
-         FROM usuario_roles ur
-         JOIN roles r ON r.id = ur.rol_id
-         WHERE ur.usuario_id = $1`,
-        [authUser.usuarioId]
+    if (req.sesion.esPaciente) {
+      const pacienteResult = await pool.query(
+        "SELECT id FROM pacientes WHERE usuario_id = $1",
+        [req.sesion.token.usuarioId]
       );
-      const userRoles = userRolesResult.rows.map(r => r.nombre);
-      
-      if (userRoles.includes("paciente")) {
-        // Verificar que el paciente_id corresponda al usuario
-        const pacienteResult = await pool.query(
-          "SELECT id FROM pacientes WHERE usuario_id = $1",
-          [authUser.usuarioId]
-        );
-        if (pacienteResult.rows.length === 0 || 
-            pacienteResult.rows[0].id.toString() !== req.params.paciente_id) {
-          return res.status(403).json({
-            error: "No autorizado",
-            glosa: "Solo puede ver sus propios exámenes",
-          });
-        }
-      } else if (!userRoles.includes("medico") && !userRoles.includes("admin")) {
+      if (
+        pacienteResult.rows.length === 0 ||
+        String(pacienteResult.rows[0].id) !== String(req.params.paciente_id)
+      ) {
         return res.status(403).json({
           error: "No autorizado",
-          glosa: "No tiene permisos para realizar esta acción",
+          glosa: "Solo puede ver sus propios exámenes",
         });
       }
-    } else {
-      return res.status(401).json({
-        error: "No autorizado",
-        glosa: "Token inválido",
-      });
     }
 
     const result = await pool.query(
-      `SELECT 
+      `SELECT
         em.*,
         tem.nombre AS tipo_examen_nombre,
         p.rut AS paciente_rut,
@@ -318,26 +190,12 @@ router.get("/paciente/:paciente_id", async (req, res) => {
 
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al obtener exámenes médicos",
-      glosa: err.message || err.toString(),
-    });
+    next(err);
   }
 });
 
-// Actualizar examen médico (médico y admin)
-router.put("/:id", delayMiddleware(5000), validate(updateExamenMedicoSchema), async (req, res) => {
+router.put("/:id", delayMiddleware(5000), requireAuth({ roles: ["medico", "admin"] }), validate(updateExamenMedicoSchema), async (req, res, next) => {
   try {
-    const authCheck = await requireRole(req, ["medico", "admin"]);
-    if (authCheck.error) {
-      return res.status(authCheck.status).json({
-        error: authCheck.error,
-        glosa: "No tiene permisos para realizar esta acción",
-      });
-    }
-    const { authUser } = authCheck;
-
     const updateFields = [];
     const updateValues = [];
     let paramIndex = 1;
@@ -366,69 +224,73 @@ router.put("/:id", delayMiddleware(5000), validate(updateExamenMedicoSchema), as
     }
 
     updateValues.push(req.params.id);
-    const result = await pool.query(
-      `UPDATE examen_medico SET ${updateFields.join(", ")} WHERE id=$${paramIndex} RETURNING *`,
-      updateValues
-    );
 
-    if (result.rows.length === 0)
-      return res.status(404).json({ error: "No encontrado" });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `UPDATE examen_medico SET ${updateFields.join(", ")} WHERE id=$${paramIndex} RETURNING *`,
+        updateValues
+      );
+      if (result.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "No encontrado" });
+      }
 
-    await pool.query(
-      "INSERT INTO auditoria (usuario_id, accion) VALUES ($1, $2)",
-      [
-        authUser?.usuarioId || null,
-        `EXAMENES_ACTUALIZAR: actualizó examen médico ID ${req.params.id}`,
-      ]
-    );
+      await registrarAuditoria(
+        {
+          usuarioId: req.sesion.token.usuarioId,
+          accion: "EXAMENES_ACTUALIZAR",
+          recurso: `examenes/${req.params.id}`,
+        },
+        client
+      );
 
-    res.json(result.rows[0]);
+      await client.query("COMMIT");
+      res.json(result.rows[0]);
+    } catch (txError) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw txError;
+    } finally {
+      client.release();
+    }
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al actualizar examen médico",
-      glosa: err.message || err.toString(),
-    });
+    next(err);
   }
 });
 
-// Eliminar examen médico (solo admin)
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireAuth({ roles: ["admin"] }), async (req, res, next) => {
   try {
-    const authCheck = await requireRole(req, ["admin"]);
-    if (authCheck.error) {
-      return res.status(authCheck.status).json({
-        error: authCheck.error,
-        glosa: "No tiene permisos para realizar esta acción",
-      });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        "DELETE FROM examen_medico WHERE id=$1 RETURNING id",
+        [req.params.id]
+      );
+      if (result.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "No encontrado" });
+      }
+      await registrarAuditoria(
+        {
+          usuarioId: req.sesion.token.usuarioId,
+          accion: "EXAMENES_ELIMINAR",
+          recurso: `examenes/${req.params.id}`,
+        },
+        client
+      );
+      await client.query("COMMIT");
+      res.json({ deleted: true });
+    } catch (txError) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw txError;
+    } finally {
+      client.release();
     }
-    const { authUser } = authCheck;
-
-    const result = await pool.query(
-      "DELETE FROM examen_medico WHERE id=$1 RETURNING *",
-      [req.params.id]
-    );
-
-    if (result.rows.length === 0)
-      return res.status(404).json({ error: "No encontrado" });
-
-    await pool.query(
-      "INSERT INTO auditoria (usuario_id, accion) VALUES ($1, $2)",
-      [
-        authUser?.usuarioId || null,
-        `EXAMENES_ELIMINAR: eliminó examen médico ID ${req.params.id}`,
-      ]
-    );
-
-    res.json({ deleted: true });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al eliminar examen médico",
-      glosa: err.message || err.toString(),
-    });
+    next(err);
   }
 });
 
 module.exports = router;
-

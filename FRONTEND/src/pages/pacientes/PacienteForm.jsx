@@ -2,14 +2,11 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
 import { toast } from "sonner";
-import { useFormik } from "formik";
-import { pacienteSchema } from "../../validations/pacientes";
 import PacientesTabCreate from "./PacientesTabCreate";
 
 export default function PacienteForm() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(false);
   const [initialValues, setInitialValues] = useState(null);
 
   useEffect(() => {
@@ -44,7 +41,7 @@ export default function PacienteForm() {
         discapacidades: data.discapacidades || "",
         observaciones_medicas_generales: data.observaciones_medicas_generales || "",
       });
-    } catch (error) {
+    } catch {
       toast.error("Error al cargar paciente");
       navigate("/pacientes");
     }

@@ -61,6 +61,8 @@ CREATE TABLE public.usuarios (
     nombre_usuario text NOT NULL,
     contrasena text NOT NULL,
     correo text NOT NULL,
+    activo boolean DEFAULT true,
+    token_version bigint DEFAULT 0,
     created_at timestamp with time zone DEFAULT now()
 );
 
@@ -266,6 +268,7 @@ ALTER TABLE public.documentos_examen ALTER COLUMN id ADD GENERATED ALWAYS AS IDE
 CREATE TABLE public.auditoria (
     id bigint NOT NULL,
     usuario_id bigint,
+    actor_nombre text,
     accion text NOT NULL,
     fecha_hora timestamp with time zone DEFAULT now()
 );
@@ -285,9 +288,14 @@ ALTER TABLE public.auditoria ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
     CACHE 1
 );
 
-INSERT INTO public.usuarios OVERRIDING SYSTEM VALUE VALUES (1, 'admin', 'admin', 'admin@cuidarteplus.com');
-INSERT INTO public.usuarios OVERRIDING SYSTEM VALUE VALUES (2, 'medico', 'medico', 'medico@cuidarteplus.com');
-INSERT INTO public.usuarios OVERRIDING SYSTEM VALUE VALUES (3, 'paciente', 'paciente', 'paciente@cuidarteplus.com');
+-- HAL-02: contraseñas sembradas con hash scrypt; las contraseñas de demo son:
+--   admin:    Cuidarte*2026adm
+--   medico:   Cuidarte*2026mdc
+--   paciente: Cuidarte*2026pct
+INSERT INTO public.usuarios (id, nombre_usuario, contrasena, correo, activo, token_version) OVERRIDING SYSTEM VALUE VALUES
+(1, 'admin', 'scrypt$32768$8$1$07d5234c66d02ca49acd893e55f2c4e8$cb679fb968594badac37e57fb72d05265b505f7f0d9568be936c614ef143d8ca9ae591ece65e2f85b72fa463c140d39cd669dc6eb3c4dd1cdb5d2a2be080e784', 'admin@cuidarteplus.com', true, 0),
+(2, 'medico', 'scrypt$32768$8$1$7bf03b5b2fdff5bfeadc03e1f91446e7$1ba51ca0a769d3038862b12dcb351bd54df9c8904962c34d5c739acce6dcde48a45da8f82080c65d6de470b4bf54e4d6423d4287303118512774b632c7b5893b', 'medico@cuidarteplus.com', true, 0),
+(3, 'paciente', 'scrypt$32768$8$1$2b44072e1f7d337190f6e045a28d8e6a$5823a42557add4dc0317eb7ef39efa717a5a8669676e9fd86607c826f907d1ab39ac04a7e7ddd32e677f9393344dfe1b7e2444a98968e733ace027b333469965', 'paciente@cuidarteplus.com', true, 0);
 
 --
 -- Data for Name: roles; Type: TABLE DATA; Schema: public; Owner: postgres

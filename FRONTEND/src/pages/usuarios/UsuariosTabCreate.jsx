@@ -17,6 +17,36 @@ import { api } from "../../lib/api";
 import { toast } from "sonner";
 import { useFormik } from "formik";
 import * as yup from "yup";
+import {
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_MAX_LENGTH,
+  validarPoliticaContrasena,
+} from "../../utils/passwordPolicy";
+
+// HAL-12: la contraseña cumple la misma política que valida el backend
+// (mínimo 12 caracteres y 3 de 4 categorías).
+const campoContrasena = yup
+  .string()
+  .required("La contraseña es requerida")
+  .min(
+    PASSWORD_MIN_LENGTH,
+    `La contraseña debe tener al menos ${PASSWORD_MIN_LENGTH} caracteres`
+  )
+  .max(
+    PASSWORD_MAX_LENGTH,
+    `La contraseña no puede exceder ${PASSWORD_MAX_LENGTH} caracteres`
+  )
+  .test(
+    "politica-contrasena",
+    "La contraseña no cumple la política del sistema",
+    function (value) {
+      const errores = validarPoliticaContrasena(value);
+      if (errores.length > 0) {
+        return this.createError({ message: errores.join(". ") });
+      }
+      return true;
+    }
+  );
 
 const createUserSchema = yup.object().shape({
   nombre_usuario: yup
@@ -29,10 +59,7 @@ const createUserSchema = yup.object().shape({
     .required("El correo es requerido")
     .email("El correo debe tener un formato válido")
     .max(255, "El correo no puede exceder 255 caracteres"),
-  contrasena_hash: yup
-    .string()
-    .required("La contraseña es requerida")
-    .min(6, "La contraseña debe tener al menos 6 caracteres"),
+  contrasena_hash: campoContrasena,
   rol_id: yup
     .number()
     .required("El rol es requerido")
@@ -65,7 +92,7 @@ export default function UsuariosTabCreate({ onSuccess, onLoad }) {
         formik.resetForm();
         onLoad();
         onSuccess();
-      } catch (error) {
+      } catch {
         // El error ya se maneja en el interceptor
       } finally {
         setLoading(false);

@@ -25,12 +25,14 @@ root
 	|package.json
 	|README.md
 ```
-En el archivo `.env` se definen las variables de entorno que utilizará docker al momento de crear las imágenes, por lo que puedes modificarlas en el caso de tener otros servicios corriendo en tu equipo que utilicen los mismos puertos.
+En el archivo `.env` (no versionado; copia `.env.example`) se definen las variables de entorno que utilizará docker al momento de crear las imágenes:
 
-1. JWT_SECRET: `0d1d8132f0fde5beabb417b434ff10f1cae8635a461686b0f46ac9c2bbfbd0e8` Llave utilizada para cifrar y generar los tokens de sesión
-2. PORT_POSTGRES: `15442` Puerto expuesto que utilizará tu equipo para permitir acceder a la conexión a la base de datos
-3. PORT_BACKEND: `4444` Puerto expuesto que utilizará tu equipo para acceder a la API
-4. PORT_FRONTEND: `3333` Puerto expuesto que utilizará tu equipo para acceder al cliente - frontend
+1. JWT_SECRET: clave aleatoria de 64 caracteres hexadecimales para firmar los tokens de sesión. **Genera la tuya** con `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Compose fallará si falta.
+2. POSTGRES_USER / POSTGRES_PASSWORD: credenciales de la base de datos (sin valores por defecto; Compose fallará si faltan).
+3. PORT_BACKEND: `4444` Puerto que utilizará tu equipo para acceder a la API.
+4. PORT_FRONTEND: `3333` Puerto que utilizará tu equipo para acceder al cliente - frontend.
+
+> **Nota de seguridad:** la base de datos PostgreSQL **no se publica** al host; solo es alcanzable desde la red interna del Docker Compose. Esos cambios corresponden a la corrección del hallazgo HAL-03 (ver `Docs/correcciones/`).
 
 ## Inicialización con Docker
 Abre la terminal y situate en la raíz del proyecto y ejecuta el comando:
@@ -38,9 +40,10 @@ Abre la terminal y situate en la raíz del proyecto y ejecuta el comando:
 1. Ejecuta `docker-compose up -d` para levantar todos los servicios
 2. El frontend estará disponible en `http://localhost:3333` (o el puerto configurado en .env)
 3. El backend estará disponible en `http://localhost:4444` (o el puerto configurado en .env)
-4. La base de datos estará disponible para conectarse mediante:
-	4.1 Host: `localhost`
-	4.2 Port: `15442 `(o el configurado en .env)
-	4.3 Database: `cuidarteplus`
-	4.4 Nombre de usuario: `postgres`
-	4.5 Contraseña: `postgres`
+4. La base de datos **no es accesible desde el host** (solo red interna del compose, HAL-03). Credenciales de la demo (con hash scrypt en BD, HAL-02):
+
+   | Usuario  | Rol    | Contraseña de demo      |
+   |----------|--------|--------------------------|
+   | `admin`    | admin    | `Cuidarte*2026adm`     |
+   | `medico`   | medico   | `Cuidarte*2026mdc`     |
+   | `paciente` | paciente | `Cuidarte*2026pct`     |

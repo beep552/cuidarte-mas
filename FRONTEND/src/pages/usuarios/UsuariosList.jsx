@@ -11,7 +11,7 @@ import UsuariosTabCreate from "./UsuariosTabCreate";
 export default function UsuariosList() {
   const [items, setItems] = useState([]);
   const [tabValue, setTabValue] = useState(0);
-  const { role, user } = useAuth();
+  const { role } = useAuth();
   
   // Verificar si es administrador (puede ser "admin" o "administrador")
   const esAdmin = role === "admin" || role === "administrador";

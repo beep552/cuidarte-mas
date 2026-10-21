@@ -1,4 +1,33 @@
 import * as yup from "yup";
+import {
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_MAX_LENGTH,
+  validarPoliticaContrasena,
+} from "../../utils/passwordPolicy";
+
+/**
+ * HAL-12: política de contraseñas (mín. 12 + 3 de 4 categorías), reflejada
+ * en el mismo criterio que verifica el backend (src/utils/password.js).
+ */
+const campoContrasena = yup
+  .string()
+  .required("La contraseña es requerida")
+  .min(
+    PASSWORD_MIN_LENGTH,
+    `La contraseña debe tener al menos ${PASSWORD_MIN_LENGTH} caracteres`
+  )
+  .max(PASSWORD_MAX_LENGTH, `La contraseña no puede exceder ${PASSWORD_MAX_LENGTH} caracteres`)
+  .test(
+    "politica-contrasena",
+    "La contraseña no cumple la política del sistema",
+    function (value) {
+      const errores = validarPoliticaContrasena(value);
+      if (errores.length > 0) {
+        return this.createError({ message: errores.join(". ") });
+      }
+      return true;
+    }
+  );
 
 export const loginSchema = yup.object().shape({
   nombre_usuario: yup
@@ -23,18 +52,15 @@ export const registerUserSchema = yup.object().shape({
     .required("El correo es requerido")
     .email("El correo debe tener un formato válido")
     .max(255, "El correo no puede exceder 255 caracteres"),
-  contrasena_hash: yup
-    .string()
-    .required("La contraseña es requerida")
-    .min(6, "La contraseña debe tener al menos 6 caracteres"),
+  contrasena_hash: campoContrasena,
 });
 
 export const registerEmpresaSchema = yup.object().shape({
   nombre: yup
     .string()
     .required("El nombre de la empresa es requerido")
-    .min(2, "El nombre debe tener al menos 2 caracteres")
-    .max(255, "El nombre no puede exceder 255 caracteres"),
+    .min(2, "El nombre de la empresa debe tener al menos 2 caracteres")
+    .max(255, "El nombre de la empresa no puede exceder 255 caracteres"),
   calle: yup
     .string()
     .required("La calle es requerida")

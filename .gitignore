@@ -1,2 +1,16 @@
 BACKEND/node_modules
 FRONTEND/node_modules
+
+# Secretos y entorno local (HAL-03): nada de variables reales versionadas
+.env
+BACKEND/.env
+FRONTEND/.env
+.env.*
+!.env.example
+
+# Artefactos y logs
+uploads/
+BACKEND/uploads/
+BACKEND/uploads/documentos/
+*.log
+DIST/

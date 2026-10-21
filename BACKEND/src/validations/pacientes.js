@@ -1,11 +1,14 @@
 const yup = require("yup");
+const { validarRut } = require("../utils/rut");
+
+const campoRut = yup
+  .string()
+  .required("El RUT es requerido")
+  .test("rut-dv", (valor) => validarRut(valor || "").motivo);
 
 const pacienteSchema = yup.object().shape({
   // Información personal
-  rut: yup
-    .string()
-    .required("El RUT es requerido")
-    .matches(/^([0-9]{1,2}(\.[0-9]{3})*-[0-9kK]|[0-9]+-[0-9kK])$/, "El RUT debe tener formato válido (ej: 12.345.678-9 o 12345678-9)"),
+  rut: campoRut,
   primer_nombre: yup
     .string()
     .required("El primer nombre es requerido")
@@ -93,11 +96,13 @@ const pacienteSchema = yup.object().shape({
     .optional(),
 });
 
+const campoRutOpcional = yup
+  .string()
+  .optional()
+  .test("rut-dv", (valor) => (valor == null ? true : validarRut(valor).motivo));
+
 const updatePacienteSchema = pacienteSchema.shape({
-  rut: yup
-    .string()
-    .matches(/^([0-9]{1,2}(\.[0-9]{3})*-[0-9kK]|[0-9]+-[0-9kK])$/, "El RUT debe tener formato válido (ej: 12.345.678-9 o 12345678-9)")
-    .optional(),
+  rut: campoRutOpcional,
   primer_nombre: yup
     .string()
     .min(2, "El primer nombre debe tener al menos 2 caracteres")

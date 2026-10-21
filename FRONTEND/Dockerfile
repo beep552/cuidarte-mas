@@ -1,5 +1,7 @@
 # Etapa 1: Construcción
-FROM node:20 AS builder
+# Corrige HAL-25: Node 20 alcanzó EOL; se usa la LTS 22 (variante glibc para
+# no romper el ajuste de dependencias opcionales de rollup/esbuild).
+FROM node:22 AS builder
 
 WORKDIR /app
 

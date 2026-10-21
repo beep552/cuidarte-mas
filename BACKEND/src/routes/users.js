@@ -1,598 +1,412 @@
 const express = require("express");
 const { pool } = require("../db");
-const jwt = require("jsonwebtoken");
 const validate = require("../middleware/validate");
 const { createUserSchema, updateUserSchema } = require("../validations/users");
+const { requireAuth, normalizarRol } = require("../middleware/auth");
+const {
+  hashPassword,
+  validarPoliticaContrasena,
+} = require("../utils/password");
+const { registrarAuditoria } = require("../utils/auditoria");
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || "inseguro";
 
-function getUserFromAuthHeader(req) {
-  const auth = req.headers.authorization || "";
-  if (!auth.startsWith("Bearer ")) return null;
-  try {
-    const token = auth.substring(7);
-    const decoded = jwt.verify(token, JWT_SECRET);
-    return decoded;
-  } catch (error) {
-    console.error(error);
-    return null;
-  }
+/**
+ * Valida que el rol exista en BD. Devuelve la fila del rol o null.
+ * Los IDs de roles del sistema NO se asumen por número: se resuelve por
+ * nombre normalizado e inmutable (HAL-07).
+ */
+async function obtenerRolPorId(rolId) {
+  const result = await pool.query("SELECT id, nombre FROM roles WHERE id = $1", [rolId]);
+  return result.rows[0] || null;
 }
 
-router.post("/", validate(createUserSchema), async (req, res) => {
-  const { nombre_usuario, contrasena_hash, correo, rol_id } = req.body;
+/**
+ * POST /usuarios — crea un usuario.
+ * Corrige HAL-04: exige rol admin; el cliente puede proponer rol_id pero se
+ * valida contra la BD y la asignación la hace un administrador autenticado.
+ * Corrige HAL-02: la contraseña se hashea aquí (el campo `contrasena_hash`
+ * del DTO se trata como contraseña en claro; el nombre se mantiene por
+ * compatibilidad con el formulario).
+ * Corrige HAL-15: usuario + rol + auditoría en transacción.
+ */
+router.post("/", requireAuth({ roles: ["admin"] }), validate(createUserSchema), async (req, res, next) => {
+  const { nombre_usuario, contrasena_hash: password, correo, rol_id } = req.body;
   try {
-    const authUser = getUserFromAuthHeader(req);
-    if (!authUser) {
-      return res.status(401).json({
-        error: "No autorizado",
-        glosa: "Token inválido",
+    const errores = validarPoliticaContrasena(password, nombre_usuario);
+    if (errores) {
+      return res.status(400).json({
+        error: "Error de validación",
+        glosa: errores.join(". "),
       });
     }
 
-    // Crear usuario
-    const result = await pool.query(
-      "INSERT INTO usuarios (nombre_usuario, contrasena, correo) VALUES ($1, $2, $3) RETURNING id, nombre_usuario, correo, created_at",
-      [nombre_usuario, contrasena_hash, correo]
-    );
-    const newUser = result.rows[0];
-
-    // Si el usuario autenticado tiene empresaId y se proporciona rol_id, crear relación empresa-usuario
-    if (authUser.empresaId && rol_id) {
-      await pool.query(
-        "INSERT INTO empresa_usuarios (empresa_id, usuario_id, rol_id) VALUES ($1, $2, $3)",
-        [authUser.empresaId, newUser.id, rol_id]
-      );
-    } else if (rol_id) {
-      // Si no tiene empresaId (sistema médico) y se proporciona rol_id, crear relación usuario_roles
-      await pool.query(
-        "INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)",
-        [newUser.id, rol_id]
-      );
+    let rol = null;
+    if (rol_id !== undefined && rol_id !== null) {
+      rol = await obtenerRolPorId(rol_id);
+      if (!rol) {
+        return res.status(400).json({
+          error: "Error de validación",
+          glosa: "El rol indicado no existe",
+        });
+      }
     }
 
-    // Registrar en auditoría
-    await pool.query(
-      "INSERT INTO auditoria (usuario_id, accion) VALUES ($1, $2)",
-      [
-        authUser?.usuarioId || null,
-        `USUARIOS_CREAR: creó usuario ${nombre_usuario}${rol_id ? ` con rol ${rol_id}` : ""}`,
-      ]
-    );
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
 
-    res.status(201).json(newUser);
+      // Reservar el nombre de usuario y el correo con INSERT protegido.
+      const result = await client.query(
+        "INSERT INTO usuarios (nombre_usuario, contrasena, correo) VALUES ($1, $2, $3) RETURNING id, nombre_usuario, correo, created_at",
+        [nombre_usuario, hashPassword(password), correo]
+      );
+      const newUser = result.rows[0];
+
+      if (rol) {
+        await client.query(
+          "INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)",
+          [newUser.id, rol.id]
+        );
+      }
+
+      await registrarAuditoria(
+        {
+          usuarioId: req.sesion.token.usuarioId,
+          accion: "USUARIOS_CREAR",
+          recurso: `usuarios/${newUser.id}`,
+          detalle: `creó usuario ${nombre_usuario}${rol ? ` con rol ${rol.nombre}` : " sin rol"}`,
+        },
+        client
+      );
+
+      await client.query("COMMIT");
+
+      res.status(201).json(rol ? { ...newUser, rol_id: rol.id, rol_nombre: rol.nombre } : newUser);
+    } catch (txError) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw txError;
+    } finally {
+      client.release();
+    }
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al crear usuario",
-      glosa: err.message || err.toString(),
-    });
+    next(err);
   }
 });
 
-router.get("/", async (req, res) => {
+/**
+ * GET /usuarios — lista usuarios con rol (HAL-34).
+ * Requiere admin (HAL-04/06), acepta paginación (HAL-32).
+ */
+router.get("/", requireAuth({ roles: ["admin"] }), async (req, res, next) => {
   try {
-    const authUser = getUserFromAuthHeader(req);
-    if (!authUser) {
-      return res.status(401).json({
-        error: "No autorizado",
-        glosa: "Token inválido",
-      });
-    }
+    const limite = Math.min(Number.parseInt(req.query.limit, 10) || 100, 200);
+    const pagina = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
 
-    // Verificar que el usuario tenga rol admin
-    let isAdmin = false;
-
-    // Si tiene empresaId, verificar rol desde empresa_usuarios
-    if (authUser.empresaId) {
-      const empresaUsuarioResult = await pool.query(
-        `SELECT eu.rol_id, r.nombre AS rol_nombre
-         FROM empresa_usuarios eu
-         LEFT JOIN roles r ON r.id = eu.rol_id
-         WHERE eu.usuario_id = $1 AND eu.empresa_id = $2`,
-        [authUser.usuarioId, authUser.empresaId]
-      );
-      
-      if (empresaUsuarioResult.rows.length > 0) {
-        const rolNombre = empresaUsuarioResult.rows[0].rol_nombre;
-        const rolId = empresaUsuarioResult.rows[0].rol_id;
-        // Verificar si es admin (rol_id = 1 o nombre = "admin" o "administrador")
-        isAdmin = rolId === 1 || rolNombre === "admin" || rolNombre === "administrador";
-      }
-    } else {
-      // Si no tiene empresaId, verificar rol desde usuario_roles (sistema médico)
-      const userRolesResult = await pool.query(
-        `SELECT r.nombre 
-         FROM usuario_roles ur
-         JOIN roles r ON r.id = ur.rol_id
-         WHERE ur.usuario_id = $1`,
-        [authUser.usuarioId]
-      );
-      const userRoles = userRolesResult.rows.map((r) => r.nombre);
-      isAdmin = userRoles.includes("admin") || userRoles.includes("administrador");
-    }
-
-    if (!isAdmin) {
-      return res.status(403).json({
-        error: "No autorizado",
-        glosa: "Solo los administradores pueden listar todos los usuarios",
-      });
-    }
-
-    // Listar todos los usuarios del sistema
     const result = await pool.query(
-      `SELECT u.id, u.nombre_usuario, u.correo, u.created_at 
+      `SELECT u.id, u.nombre_usuario, u.correo, u.created_at, u.activo,
+              COALESCE(r.nombre, NULL) AS rol_nombre
        FROM usuarios u
-       ORDER BY u.id DESC`
+       LEFT JOIN LATERAL (
+         SELECT r2.nombre FROM usuario_roles ur2
+         JOIN roles r2 ON r2.id = ur2.rol_id
+         WHERE ur2.usuario_id = u.id
+         ORDER BY r2.id LIMIT 1
+       ) r ON TRUE
+       ORDER BY u.id DESC
+       LIMIT $1 OFFSET $2`,
+      [limite, (pagina - 1) * limite]
     );
 
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al listar usuarios",
-      glosa: err.message || err.toString(),
-    });
+    next(err);
   }
 });
 
-router.get("/:id", async (req, res) => {
+/**
+ * GET /usuarios/:id — detalle. El paciente sólo puede ver sus propios datos.
+ */
+router.get("/:id", requireAuth(), async (req, res, next) => {
   try {
-    const authUser = getUserFromAuthHeader(req);
-    if (!authUser) {
-      return res.status(401).json({
-        error: "No autorizado",
-        glosa: "Token inválido",
-      });
+    const propio =
+      Number(req.sesion.token.usuarioId) === Number(req.params.id);
+    if (req.sesion.esPaciente && !propio) {
+      return res.status(403).json({ error: "No autorizado", glosa: "Solo puede ver sus propios datos" });
     }
 
-    // Si tiene empresaId, usar lógica de empresas
-    if (authUser.empresaId) {
-      // Obtener información del usuario y su rol desde empresa_usuarios
-      const result = await pool.query(
-        `SELECT 
-          u.id, 
-          u.nombre_usuario, 
-          u.correo, 
-          u.created_at,
-          eu.rol_id,
-          r.nombre AS rol_nombre
-        FROM usuarios u
-        INNER JOIN empresa_usuarios eu ON eu.usuario_id = u.id AND eu.empresa_id = $2
-        LEFT JOIN roles r ON r.id = eu.rol_id
-        WHERE u.id = $1 AND eu.empresa_id = $2`,
-        [req.params.id, authUser.empresaId]
-      );
-
-      if (result.rows.length === 0)
-        return res.status(404).json({ error: "No encontrado" });
-
-      const usuario = result.rows[0];
-
-      // Verificar si es el único administrador de la empresa
-      if (usuario.rol_id === 1) {
-        // 1 = administrador
-        const adminCount = await pool.query(
-          `SELECT COUNT(*) as count 
-           FROM empresa_usuarios 
-           WHERE empresa_id = $1 AND rol_id = 1`,
-          [authUser.empresaId]
-        );
-        usuario.es_unico_administrador =
-          Number.parseInt(adminCount.rows[0].count, 10) === 1;
-      } else {
-        usuario.es_unico_administrador = false;
-      }
-
-      return res.json(usuario);
-    }
-
-    // Si no tiene empresaId, usar lógica de usuario_roles (sistema médico)
-    // Verificar que el usuario solo pueda ver sus propios datos o sea admin/medico
-    const userRolesResult = await pool.query(
-      `SELECT r.nombre 
-       FROM usuario_roles ur
-       JOIN roles r ON r.id = ur.rol_id
-       WHERE ur.usuario_id = $1`,
-      [authUser.usuarioId]
-    );
-    const userRoles = userRolesResult.rows.map((r) => r.nombre);
-    const isAdminOrMedico =
-      userRoles.includes("admin") || userRoles.includes("medico");
-    const isPaciente = userRoles.includes("paciente") && !isAdminOrMedico;
-
-    // Si es paciente, solo puede ver sus propios datos
-    if (isPaciente && Number(authUser.usuarioId) !== Number(req.params.id)) {
-      return res.status(403).json({
-        error: "No autorizado",
-        glosa: "Solo puede ver sus propios datos",
-      });
-    }
-
-    // Obtener información del usuario y su rol desde usuario_roles
     const result = await pool.query(
-      `SELECT 
-        u.id, 
-        u.nombre_usuario, 
-        u.correo, 
-        u.created_at,
-        ur.rol_id,
-        r.nombre AS rol_nombre
-      FROM usuarios u
-      LEFT JOIN usuario_roles ur ON ur.usuario_id = u.id
-      LEFT JOIN roles r ON r.id = ur.rol_id
-      WHERE u.id = $1
-      LIMIT 1`,
+      `SELECT u.id, u.nombre_usuario, u.correo, u.created_at, u.activo,
+              ur.rol_id, r.nombre AS rol_nombre
+       FROM usuarios u
+       LEFT JOIN usuario_roles ur ON ur.usuario_id = u.id
+       LEFT JOIN roles r ON r.id = ur.rol_id
+       WHERE u.id = $1
+       LIMIT 1`,
       [req.params.id]
     );
+    if (result.rows.length === 0) return res.status(404).json({ error: "No encontrado" });
+    res.json({ ...result.rows[0], es_unico_administrador: false });
+  } catch (err) {
+    next(err);
+  }
+});
 
-    if (result.rows.length === 0)
+/**
+ * PUT /usuarios/:id — actualización.
+ * Corrige HAL-05: sólo un ADMIN cambia roles; NADIE cambia su propio rol
+ * (ni siquiera admin); el rol destino debe existir y no puede dejar al
+ * sistema sin administradores (protege el último admin).
+ * Corrige HAL-02: la contraseña nueva se hashea con scrypt.
+ * Corrige HAL-21: validate reasigna el body filtrado y updateUserSchema
+ * declara rol_id explícitamente.
+ * Corrige HAL-15: operaciones en transacción + auditoría.
+ * Corrige HAL-09: sube token_version tras cambiar contraseña o rol.
+ */
+router.put("/:id", requireAuth(), validate(updateUserSchema), async (req, res, next) => {
+  const { nombre_usuario, contrasena_hash: password, correo, rol_id } = req.body;
+  const actorId = Number(req.sesion.token.usuarioId);
+  const objetivoId = Number(req.params.id);
+
+  try {
+    const objetivo = await pool.query(
+      "SELECT id, nombre_usuario, contrasena, activo FROM usuarios WHERE id = $1",
+      [objetivoId]
+    );
+    if (objetivo.rows.length === 0) {
       return res.status(404).json({ error: "No encontrado" });
-
-    const usuario = result.rows[0];
-    usuario.es_unico_administrador = false; // No aplica para sistema médico
-
-    res.json(usuario);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al obtener usuario",
-      glosa: err.message || err.toString(),
-    });
-  }
-});
-
-router.put("/:id", validate(updateUserSchema), async (req, res) => {
-  const { nombre_usuario, contrasena_hash, correo, rol_id } = req.body;
-  try {
-    const authUser = getUserFromAuthHeader(req);
-    if (!authUser) {
-      return res.status(401).json({
-        error: "No autorizado",
-        glosa: "Token inválido",
-      });
     }
 
-    // Si tiene empresaId, usar lógica de empresas
-    if (authUser.empresaId) {
-      return await updateUsuarioEmpresa(req, res, authUser, {
-        nombre_usuario,
-        contrasena_hash,
-        correo,
-        rol_id,
-      });
-    }
+    const esPropio = actorId === objetivoId;
+    const cambioRol = rol_id !== undefined && rol_id !== null;
 
-    // Si no tiene empresaId, usar lógica de usuario_roles (sistema médico)
-    return await updateUsuarioSistemaMedico(req, res, authUser, {
-      nombre_usuario,
-      contrasena_hash,
-      correo,
-      rol_id,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al actualizar usuario",
-      glosa: err.message || err.toString(),
-    });
-  }
-});
-
-async function updateUsuarioEmpresa(
-  req,
-  res,
-  authUser,
-  { nombre_usuario, contrasena_hash, correo, rol_id }
-) {
-  try {
-    // Verificar que el usuario autenticado sea administrador
-    const authUserRoleResult = await pool.query(
-      `SELECT eu.rol_id, r.nombre AS rol_nombre
-       FROM empresa_usuarios eu
-       LEFT JOIN roles r ON r.id = eu.rol_id
-       WHERE eu.usuario_id = $1 AND eu.empresa_id = $2`,
-      [authUser.usuarioId, authUser.empresaId]
-    );
-    
-    if (authUserRoleResult.rows.length === 0) {
-      return res.status(403).json({
-        error: "No autorizado",
-        glosa: "No tiene permisos para editar usuarios",
-      });
-    }
-    
-    const authRolId = authUserRoleResult.rows[0].rol_id;
-    const authRolNombre = authUserRoleResult.rows[0].rol_nombre;
-    const isAdmin = authRolId === 1 || authRolNombre === "admin" || authRolNombre === "administrador";
-    
-    if (!isAdmin) {
-      return res.status(403).json({
-        error: "No autorizado",
-        glosa: "Solo los administradores pueden editar usuarios",
-      });
-    }
-
-    // Verificar si se está intentando cambiar el rol
-    if (rol_id !== undefined) {
-      // Verificar si el usuario está intentando cambiar su propio rol
-      if (
-        authUser.usuarioId &&
-        Number(authUser.usuarioId) === Number(req.params.id)
-      ) {
-        return res.status(400).json({
-          error: "No se puede cambiar el rol",
-          glosa: "No puedes cambiar tu propio rol",
-        });
-      }
-
-      const usuarioActual = await pool.query(
-        `SELECT eu.rol_id 
-         FROM empresa_usuarios eu
-         WHERE eu.usuario_id = $1 AND eu.empresa_id = $2`,
-        [req.params.id, authUser.empresaId]
-      );
-
-      if (usuarioActual.rows.length > 0 && usuarioActual.rows[0].rol_id === 1) {
-        // Es administrador, verificar si es el único
-        const adminCount = await pool.query(
-          `SELECT COUNT(*) as count 
-           FROM empresa_usuarios 
-           WHERE empresa_id = $1 AND rol_id = 1`,
-          [authUser.empresaId]
-        );
-
-        if (Number.parseInt(adminCount.rows[0].count, 10) === 1 && rol_id !== 1) {
-          return res.status(400).json({
-            error: "No se puede cambiar el rol",
-            glosa:
-              "No se puede cambiar el rol del único administrador de la empresa",
-          });
-        }
-      }
-    }
-
-    // Actualizar información del usuario
-    const updateFields = [];
-    const updateValues = [];
-    let paramIndex = 1;
-
-    if (nombre_usuario !== undefined) {
-      updateFields.push(`nombre_usuario=$${paramIndex++}`);
-      updateValues.push(nombre_usuario);
-    }
-    if (contrasena_hash !== undefined) {
-      updateFields.push(`contrasena=$${paramIndex++}`);
-      updateValues.push(contrasena_hash);
-    }
-    if (correo !== undefined) {
-      updateFields.push(`correo=$${paramIndex++}`);
-      updateValues.push(correo);
-    }
-
-    if (updateFields.length > 0) {
-      updateValues.push(req.params.id);
-      const result = await pool.query(
-        `UPDATE usuarios SET ${updateFields.join(
-          ", "
-        )} WHERE id=$${paramIndex} RETURNING id, nombre_usuario, correo, created_at`,
-        updateValues
-      );
-      if (result.rows.length === 0)
-        return res.status(404).json({ error: "No encontrado" });
-    }
-
-    // Actualizar rol si se proporciona
-    if (rol_id !== undefined) {
-      const empresaUsuarioResult = await pool.query(
-        `SELECT id FROM empresa_usuarios WHERE usuario_id = $1 AND empresa_id = $2`,
-        [req.params.id, authUser.empresaId]
-      );
-
-      if (empresaUsuarioResult.rows.length > 0) {
-        await pool.query(
-          `UPDATE empresa_usuarios SET rol_id = $1 WHERE usuario_id = $2 AND empresa_id = $3`,
-          [rol_id, req.params.id, authUser.empresaId]
-        );
-      }
-    }
-
-    // Obtener datos actualizados del usuario
-    const usuarioResult = await pool.query(
-      `SELECT 
-        u.id, 
-        u.nombre_usuario, 
-        u.correo, 
-        u.created_at,
-        eu.rol_id,
-        r.nombre AS rol_nombre
-      FROM usuarios u
-      LEFT JOIN empresa_usuarios eu ON eu.usuario_id = u.id AND eu.empresa_id = $2
-      LEFT JOIN roles r ON r.id = eu.rol_id
-      WHERE u.id = $1`,
-      [req.params.id, authUser.empresaId]
-    );
-
-    await pool.query(
-      "INSERT INTO auditoria (usuario_id, accion) VALUES ($1, $2)",
-      [
-        authUser?.usuarioId || null,
-        `USUARIOS_ACTUALIZAR: actualizó usuario ID ${req.params.id}${
-          rol_id !== undefined ? ` y rol a ${rol_id}` : ""
-        }`,
-      ]
-    );
-
-    res.json(usuarioResult.rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al actualizar usuario",
-      glosa: err.message || err.toString(),
-    });
-  }
-}
-
-async function updateUsuarioSistemaMedico(
-  req,
-  res,
-  authUser,
-  { nombre_usuario, contrasena_hash, correo, rol_id }
-) {
-  try {
-    // Obtener roles del usuario autenticado
-    const userRolesResult = await pool.query(
-      `SELECT r.nombre 
-       FROM usuario_roles ur
-       JOIN roles r ON r.id = ur.rol_id
-       WHERE ur.usuario_id = $1`,
-      [authUser.usuarioId]
-    );
-    const userRoles = userRolesResult.rows.map((r) => r.nombre);
-    const isAdmin = userRoles.includes("admin") || userRoles.includes("administrador");
-    const isAdminOrMedico =
-      userRoles.includes("admin") || userRoles.includes("administrador") || userRoles.includes("medico");
-    const isPaciente = userRoles.includes("paciente") && !isAdminOrMedico;
-
-    // Si es paciente, solo puede actualizar sus propios datos y no puede cambiar el rol
-    if (isPaciente) {
-      if (Number(authUser.usuarioId) !== Number(req.params.id)) {
-        return res.status(403).json({
-          error: "No autorizado",
-          glosa: "Solo puede actualizar sus propios datos",
-        });
-      }
-      if (rol_id !== undefined) {
-        return res.status(403).json({
-          error: "No autorizado",
-          glosa: "No puede cambiar su rol",
-        });
-      }
-    }
-
-    // Si es admin, puede editar cualquier usuario
-    // Si no es admin, solo puede editar sus propios datos (ya verificado arriba para pacientes)
-    if (!isAdmin && Number(authUser.usuarioId) !== Number(req.params.id)) {
+    // Regla de autorización única (HAL-05): admin para datos ajenos y roles.
+    // Un paciente/médico sólo puede editar su propio perfil básico.
+    if (!esPropio && !req.sesion.isAdmin) {
       return res.status(403).json({
         error: "No autorizado",
         glosa: "Solo los administradores pueden editar otros usuarios",
       });
     }
 
-    // Si no es admin o médico, no puede cambiar roles de otros usuarios
-    if (rol_id !== undefined && !isAdminOrMedico) {
-      return res.status(403).json({
-        error: "No autorizado",
-        glosa: "No tiene permisos para cambiar roles",
-      });
+    if (cambioRol) {
+      if (!req.sesion.isAdmin) {
+        return res.status(403).json({
+          error: "No autorizado",
+          glosa: "Solo un administrador puede cambiar roles",
+        });
+      }
+      if (esPropio) {
+        return res.status(403).json({
+          error: "No autorizado",
+          glosa: "Nadie puede cambiar su propio rol",
+        });
+      }
+
+      const rol = await obtenerRolPorId(rol_id);
+      if (!rol) {
+        return res.status(400).json({ error: "Error de validación", glosa: "El rol indicado no existe" });
+      }
+
+      // Protección del último administrador (HAL-33).
+      if (normalizarRol(rol.nombre) !== "admin") {
+        const objetivoRoles = await pool.query(
+          `SELECT r.nombre FROM usuario_roles ur
+           JOIN roles r ON r.id = ur.rol_id
+           WHERE ur.usuario_id = $1`,
+          [objetivoId]
+        );
+        const rolesObjetivoBD = objetivoRoles.rows.map(normalizarRol).filter(Boolean);
+        if (rolesObjetivoBD.includes("admin")) {
+          const admins = await pool.query(
+            `SELECT COUNT(DISTINCT ur.usuario_id) AS total
+             FROM usuario_roles ur JOIN roles r ON r.id = ur.rol_id
+             WHERE r.nombre IN ('admin','administrador') AND ur.usuario_id <> $1`,
+            [objetivoId]
+          );
+          if (Number(admins.rows[0].total) === 0) {
+            return res.status(400).json({
+              error: "Operación no permitida",
+              glosa: "No se puede degradar al último administrador del sistema",
+            });
+          }
+        }
+      }
     }
 
-    // Actualizar información del usuario
-    const updateFields = [];
-    const updateValues = [];
-    let paramIndex = 1;
-
-    if (nombre_usuario !== undefined) {
-      updateFields.push(`nombre_usuario=$${paramIndex++}`);
-      updateValues.push(nombre_usuario);
-    }
-    if (contrasena_hash !== undefined) {
-      updateFields.push(`contrasena=$${paramIndex++}`);
-      updateValues.push(contrasena_hash);
-    }
-    if (correo !== undefined) {
-      updateFields.push(`correo=$${paramIndex++}`);
-      updateValues.push(correo);
+    if (password !== undefined) {
+      const errores = validarPoliticaContrasena(password, nombre_usuario);
+      if (errores) {
+        return res.status(400).json({ error: "Error de validación", glosa: errores.join(". ") });
+      }
     }
 
-    if (updateFields.length > 0) {
-      updateValues.push(req.params.id);
-      const result = await pool.query(
-        `UPDATE usuarios SET ${updateFields.join(
-          ", "
-        )} WHERE id=$${paramIndex} RETURNING id, nombre_usuario, correo, created_at`,
-        updateValues
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const updateFields = [];
+      const updateValues = [];
+      let paramIndex = 1;
+
+      if (nombre_usuario !== undefined) {
+        updateFields.push(`nombre_usuario=$${paramIndex++}`);
+        updateValues.push(nombre_usuario);
+      }
+      if (password !== undefined) {
+        // Re-hasheo con scrypt en toda actualización de contraseña (HAL-02):
+        // se guarda el hash, nunca el texto plano.
+        updateFields.push(`contrasena=$${paramIndex++}`);
+        updateValues.push(hashPassword(password));
+      }
+      if (correo !== undefined) {
+        updateFields.push(`correo=$${paramIndex++}`);
+        updateValues.push(correo);
+      }
+
+      if (password !== undefined || cambioRol) {
+        // HAL-09: revoca sesiones emitidas con la configuración anterior.
+        updateFields.push(`token_version = token_version + 1`);
+      }
+
+      if (updateFields.length > 0) {
+        updateValues.push(objetivoId);
+        const result = await client.query(
+          `UPDATE usuarios SET ${updateFields.join(", ")} WHERE id=$${paramIndex} RETURNING id, nombre_usuario, correo, created_at, activo`,
+          updateValues
+        );
+        if (result.rows.length === 0) {
+          await client.query("ROLLBACK");
+          return res.status(404).json({ error: "No encontrado" });
+        }
+      }
+
+      if (cambioRol) {
+        await client.query("DELETE FROM usuario_roles WHERE usuario_id = $1", [objetivoId]);
+        await client.query("INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)", [
+          objetivoId,
+          rol_id,
+        ]);
+      }
+
+      await registrarAuditoria(
+        {
+          usuarioId: actorId,
+          accion: "USUARIOS_ACTUALIZAR",
+          recurso: `usuarios/${objetivoId}`,
+          detalle: cambioRol ? `actualizó usuario y rol (rol_id=${rol_id})` : "actualizó usuario",
+        },
+        client
       );
-      if (result.rows.length === 0)
-        return res.status(404).json({ error: "No encontrado" });
+
+      await client.query("COMMIT");
+    } catch (txError) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw txError;
+    } finally {
+      client.release();
     }
 
-    // Actualizar rol si se proporciona y tiene permisos
-    if (rol_id !== undefined && isAdminOrMedico) {
-      // Eliminar roles existentes
-      await pool.query(`DELETE FROM usuario_roles WHERE usuario_id = $1`, [
-        req.params.id,
-      ]);
-      // Agregar nuevo rol
-      await pool.query(
-        `INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)`,
-        [req.params.id, rol_id]
-      );
-    }
-
-    // Obtener datos actualizados del usuario
     const usuarioResult = await pool.query(
-      `SELECT 
-        u.id, 
-        u.nombre_usuario, 
-        u.correo, 
-        u.created_at,
-        ur.rol_id,
-        r.nombre AS rol_nombre
-      FROM usuarios u
-      LEFT JOIN usuario_roles ur ON ur.usuario_id = u.id
-      LEFT JOIN roles r ON r.id = ur.rol_id
-      WHERE u.id = $1
-      LIMIT 1`,
-      [req.params.id]
-    );
-
-    await pool.query(
-      "INSERT INTO auditoria (usuario_id, accion) VALUES ($1, $2)",
-      [
-        authUser?.usuarioId || null,
-        `USUARIOS_ACTUALIZAR: actualizó usuario ID ${req.params.id}${
-          rol_id !== undefined ? ` y rol a ${rol_id}` : ""
-        }`,
-      ]
+      `SELECT u.id, u.nombre_usuario, u.correo, u.created_at, u.activo,
+              ur.rol_id, r.nombre AS rol_nombre
+       FROM usuarios u
+       LEFT JOIN usuario_roles ur ON ur.usuario_id = u.id
+       LEFT JOIN roles r ON r.id = ur.rol_id
+       WHERE u.id = $1
+       LIMIT 1`,
+      [objetivoId]
     );
 
     res.json(usuarioResult.rows[0]);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al actualizar usuario",
-      glosa: err.message || err.toString(),
-    });
+    next(err);
   }
-}
+});
 
-router.delete("/:id", async (req, res) => {
+/**
+ * DELETE /usuarios/:id — borrado LÓGICO (desactivación).
+ * Corrige HAL-06: exige autenticación y rol admin ANTES de efectuar cualquier
+ * cambio; la operación es reversible (activo=false), no física.
+ * Corrige HAL-33: prohibido eliminarse a sí mismo y eliminar al último admin.
+ * Corrige HAL-17: la auditoría usa usuarioId numérico y va en transacción
+ * (rollback si la auditoría falla).
+ */
+router.delete("/:id", requireAuth({ roles: ["admin"] }), async (req, res, next) => {
+  const actorId = Number(req.sesion.token.usuarioId);
+  const objetivoId = Number(req.params.id);
+
   try {
-    const result = await pool.query(
-      "DELETE FROM usuarios WHERE id=$1 RETURNING *",
-      [req.params.id]
-    );
-    if (result.rows.length === 0)
-      return res.status(404).json({ error: "No encontrado" });
+    if (actorId === objetivoId) {
+      return res.status(400).json({
+        error: "Operación no permitida",
+        glosa: "No puede eliminar su propia cuenta",
+      });
+    }
 
-    const authUser = getUserFromAuthHeader(req);
-    await pool.query(
-      "INSERT INTO auditoria (usuario_id, accion) VALUES ($1, $2)",
-      [
-        authUser?.nombreUsuario || null,
-        `USUARIOS_ELIMINAR: eliminó usuario ID ${req.params.id}`,
-      ]
+    const objetivo = await pool.query(
+      `SELECT u.id, u.activo,
+              EXISTS (
+                SELECT 1 FROM usuario_roles ur
+                JOIN roles r ON r.id = ur.rol_id
+                WHERE ur.usuario_id = u.id AND r.nombre IN ('admin','administrador')
+              ) AS es_admin
+       FROM usuarios u WHERE u.id = $1`,
+      [objetivoId]
     );
+    const fila = objetivo.rows[0];
+    if (!fila) return res.status(404).json({ error: "No encontrado" });
 
-    res.json({ deleted: true });
+    if (fila.es_admin) {
+      const admins = await pool.query(
+        `SELECT COUNT(DISTINCT ur.usuario_id) AS total FROM usuario_roles ur
+         JOIN roles r ON r.id = ur.rol_id
+         WHERE r.nombre IN ('admin','administrador') AND ur.usuario_id <> $1`,
+        [objetivoId]
+      );
+      if (Number(admins.rows[0].total) === 0) {
+        return res.status(400).json({
+          error: "Operación no permitida",
+          glosa: "No se puede eliminar al último administrador del sistema",
+        });
+      }
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Borrado lógico + revocación de sesiones activas (HAL-09).
+      const result = await client.query(
+        "UPDATE usuarios SET activo = false, token_version = token_version + 1 WHERE id = $1 AND activo = true RETURNING id",
+        [objetivoId]
+      );
+      if (result.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "No encontrado" });
+      }
+
+      await registrarAuditoria(
+        {
+          usuarioId: actorId,
+          accion: "USUARIOS_ELIMINAR",
+          resultado: "OK",
+          recurso: `usuarios/${objetivoId}`,
+          detalle: "desactivó usuario (borrado lógico)",
+        },
+        client
+      );
+
+      await client.query("COMMIT");
+      res.json({ deleted: true, borradoLogico: true });
+    } catch (txError) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw txError;
+    } finally {
+      client.release();
+    }
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: "Error al eliminar usuario",
-      glosa: err.message || err.toString(),
-    });
+    next(err);
   }
 });
 

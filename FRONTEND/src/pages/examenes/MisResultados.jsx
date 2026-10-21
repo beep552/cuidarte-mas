@@ -42,7 +42,7 @@ export default function MisResultados() {
           try {
             const docsRes = await api.get(`/documentos/examen/${examen.id}`);
             documentosData[examen.id] = docsRes.data || [];
-          } catch (error) {
+          } catch {
             documentosData[examen.id] = [];
           }
         }
@@ -68,7 +68,7 @@ export default function MisResultados() {
       document.body.appendChild(link);
       link.click();
       link.remove();
-    } catch (error) {
+    } catch {
       toast.error("Error al descargar documento");
     }
   };

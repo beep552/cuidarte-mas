@@ -1,11 +1,16 @@
 -- Estructura de la base de datos
 
 -- Tabla de usuarios
+-- HAL-02: `contrasena` almacena hash scrypt (código: src/utils/password.js).
+-- HAL-09: `token_version` permite revocación de sesiones.
+-- HAL-06/33: borrado lógico mediante `activo`.
 CREATE TABLE usuarios (
   id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
   nombre_usuario TEXT NOT NULL UNIQUE,
   contrasena TEXT NOT NULL,
   correo TEXT NOT NULL UNIQUE,
+  activo BOOLEAN NOT NULL DEFAULT TRUE,
+  token_version BIGINT NOT NULL DEFAULT 0,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -84,13 +89,28 @@ CREATE TABLE documentos_examen (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Tabla de auditoria
+-- Tabla de auditoría
+-- HAL-28: `actor_nombre` conserva el actor por snapshot, y los triggers
+-- hacen la tabla append-only (sin UPDATE ni DELETE).
 CREATE TABLE auditoria (
   id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
   usuario_id BIGINT REFERENCES usuarios(id) ON DELETE SET NULL,
+  actor_nombre TEXT,
   accion TEXT NOT NULL,
   fecha_hora TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Inmutabilidad de la auditoría (HAL-28): rechaza UPDATE y DELETE.
+CREATE OR REPLACE FUNCTION auditoria_append_only()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'auditoria es append-only: % prohibido', TG_OP;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER auditoria_append_only_guard
+BEFORE UPDATE OR DELETE ON auditoria
+FOR EACH ROW EXECUTE FUNCTION auditoria_append_only();
 
 -- Índices para mejorar el rendimiento
 CREATE INDEX idx_pacientes_rut ON pacientes(rut);

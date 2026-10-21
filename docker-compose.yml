@@ -3,18 +3,20 @@ services:
     image: postgres:15-alpine
     container_name: cuidarteplus-postgres-ev
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:?Define POSTGRES_USER en .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}
       POSTGRES_DB: ${POSTGRES_DB:-cuidarteplus}
       PGDATA: /var/lib/postgresql/data/pgdata
-    ports:
-      - "${PORT_POSTGRES:-15442}:5432"
+    # Corrige HAL-03: no se publica el puerto 5432 al host; sólo la red
+    # interna del compose puede alcanzar la base.
+    expose:
+      - "5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./BACKEND/sql/dump-cuidarteplus.sql:/tmp/dump-cuidarteplus.sql:ro
       - ./BACKEND/sql/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-cuidarteplus}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-cuidarteplus}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -30,10 +32,13 @@ services:
     hostname: cuidarteplus-api
     environment:
       - PORT=4000
-      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@cuidarteplus-postgres-ev:5432/${POSTGRES_DB:-cuidarteplus}
       - NODE_ENV=${NODE_ENV:-production}
-      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
+      # Corrige HAL-03: sin contraseña por defecto ni `postgres/postgres`; el
+      # entorno exige valores definidos en .env (fail-closed).
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@cuidarteplus-postgres-ev:5432/${POSTGRES_DB:-cuidarteplus}
+      - JWT_SECRET=${JWT_SECRET:?Define JWT_SECRET en .env (openssl rand -hex 32)}
       - FRONTEND_URL=http://localhost:${PORT_FRONTEND:-3333}
+      - PG_SSL=${PG_SSL:-}
     ports:
       - "${PORT_BACKEND:-4444}:4000"
     depends_on:
@@ -68,4 +73,3 @@ networks:
   cuidarteplus-network:
     driver: bridge
     name: cuidarteplus-network
-
