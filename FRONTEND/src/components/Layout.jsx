@@ -228,7 +228,7 @@ export default function Layout() {
                     fontFamily: '"Rubik", sans-serif',
                   }}
                 >
-                  {user?.nombre_usuario || "Usuario"}
+                  {user?.nombreUsuario || user?.nombre_usuario || "Usuario"}
                 </Typography>
                 <Typography
                   className="text-black text-sm block"

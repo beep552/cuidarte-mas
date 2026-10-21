@@ -4,7 +4,13 @@ const { validarRut } = require("../utils/rut");
 const campoRut = yup
   .string()
   .required("El RUT es requerido")
-  .test("rut-dv", (valor) => validarRut(valor || "").motivo);
+  .test("rut-dv", function validarDigitoVerificador(valor) {
+    const resultado = validarRut(valor || "");
+    return (
+      resultado.valido ||
+      this.createError({ message: resultado.motivo || "El RUT no es válido" })
+    );
+  });
 
 const pacienteSchema = yup.object().shape({
   // Información personal
@@ -37,6 +43,7 @@ const pacienteSchema = yup.object().shape({
     .optional(),
   estado_civil: yup
     .string()
+    .transform((valor) => (valor === "" ? undefined : valor))
     .oneOf(["soltero", "casado", "divorciado", "viudo", "union_libre"], "Estado civil inválido")
     .optional(),
   // Información de contacto
@@ -76,6 +83,7 @@ const pacienteSchema = yup.object().shape({
   // Información médica
   grupo_sanguineo: yup
     .string()
+    .transform((valor) => (valor === "" ? undefined : valor))
     .oneOf(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"], "Grupo sanguíneo inválido")
     .optional(),
   alergias: yup
@@ -99,7 +107,14 @@ const pacienteSchema = yup.object().shape({
 const campoRutOpcional = yup
   .string()
   .optional()
-  .test("rut-dv", (valor) => (valor == null ? true : validarRut(valor).motivo));
+  .test("rut-dv", function validarDigitoVerificadorOpcional(valor) {
+    if (valor == null) return true;
+    const resultado = validarRut(valor);
+    return (
+      resultado.valido ||
+      this.createError({ message: resultado.motivo || "El RUT no es válido" })
+    );
+  });
 
 const updatePacienteSchema = pacienteSchema.shape({
   rut: campoRutOpcional,

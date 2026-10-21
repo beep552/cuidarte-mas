@@ -33,6 +33,7 @@ export const pacienteSchema = yup.object().shape({
     .optional(),
   estado_civil: yup
     .string()
+    .transform((valor) => (valor === "" ? undefined : valor))
     .oneOf(["soltero", "casado", "divorciado", "viudo", "union_libre"], "Estado civil inválido")
     .optional(),
   email: yup
@@ -69,6 +70,7 @@ export const pacienteSchema = yup.object().shape({
     .optional(),
   grupo_sanguineo: yup
     .string()
+    .transform((valor) => (valor === "" ? undefined : valor))
     .oneOf(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"], "Grupo sanguíneo inválido")
     .optional(),
   alergias: yup

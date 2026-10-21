@@ -100,7 +100,9 @@ export default function ExamenDetalle() {
       // HAL-26: mostrar el mensaje de error específico devuelto por el
       // backend (tamaño, tipo o estado del examen) en lugar de uno genérico.
       const mensaje =
-        error?.response?.data?.message || "Error al subir documento";
+        error?.response?.data?.glosa ||
+        error?.response?.data?.error ||
+        "Error al subir documento";
       toast.error(mensaje);
     } finally {
       setUploading(false);

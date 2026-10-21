@@ -6,6 +6,11 @@ import bgRegistro from "../../assets/bg-registro.jpg";
 import * as yup from "yup";
 import { formatRut, RutFormat } from "@fdograph/rut-utilities";
 import { normalizeRut } from "../../lib/utils";
+import {
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_MAX_LENGTH,
+  validarPoliticaContrasena,
+} from "../../utils/passwordPolicy";
 
 const registerSchema = yup.object().shape({
   nombre_usuario: yup
@@ -16,7 +21,25 @@ const registerSchema = yup.object().shape({
   password: yup
     .string()
     .required("La contraseña es requerida")
-    .min(6, "La contraseña debe tener al menos 6 caracteres"),
+    .min(
+      PASSWORD_MIN_LENGTH,
+      `La contraseña debe tener al menos ${PASSWORD_MIN_LENGTH} caracteres`
+    )
+    .max(
+      PASSWORD_MAX_LENGTH,
+      `La contraseña no puede exceder ${PASSWORD_MAX_LENGTH} caracteres`
+    )
+    .test(
+      "politica-contrasena",
+      "La contraseña no cumple la política del sistema",
+      function (value) {
+        const errores = validarPoliticaContrasena(value);
+        if (errores.length > 0) {
+          return this.createError({ message: errores.join(". ") });
+        }
+        return true;
+      }
+    ),
   correo: yup
     .string()
     .required("El correo es requerido")

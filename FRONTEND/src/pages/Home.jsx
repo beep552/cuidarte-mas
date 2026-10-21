@@ -8,7 +8,6 @@ import {
   CircularProgress,
   Paper,
   Divider,
-  Grid,
   TextField,
   InputAdornment,
   Chip,
@@ -142,13 +141,13 @@ export default function Home() {
       <Stack spacing={3}>
         <Box>
           <Typography variant="h4" color="primary">
-            Bienvenido, <b>{user?.nombre_usuario}</b>
+            Bienvenido, <b>{user?.nombreUsuario || user?.nombre_usuario}</b>
           </Typography>
         </Box>
 
         {/* Métricas principales */}
         <div className="grid grid-cols-4 gap-4">
-          <Grid item xs={12} sm={6} md={3} className="w-full">
+          <div className="w-full">
             <Card
               sx={{
                 background: "linear-gradient(135deg, #3293BA 0%, #2A9D9E 100%)",
@@ -178,9 +177,9 @@ export default function Home() {
                 </Stack>
               </CardContent>
             </Card>
-          </Grid>
+          </div>
 
-          <Grid item xs={12} sm={6} md={3}>
+          <div className="w-full">
             <Card
               sx={{
                 background: "linear-gradient(135deg, #C5652C 0%, #6BCF9A 100%)",
@@ -210,9 +209,9 @@ export default function Home() {
                 </Stack>
               </CardContent>
             </Card>
-          </Grid>
+          </div>
 
-          <Grid item xs={12} sm={6} md={3}>
+          <div className="w-full">
             <Card
               sx={{
                 background: "linear-gradient(135deg, #FF9800 0%, #FFB74D 100%)",
@@ -242,9 +241,9 @@ export default function Home() {
                 </Stack>
               </CardContent>
             </Card>
-          </Grid>
+          </div>
 
-          <Grid item xs={12} sm={6} md={3}>
+          <div className="w-full">
             <Card
               sx={{
                 background: "linear-gradient(135deg, #9C27B0 0%, #BA68C8 100%)",
@@ -274,7 +273,7 @@ export default function Home() {
                 </Stack>
               </CardContent>
             </Card>
-          </Grid>
+          </div>
         </div>
 
         {/* Últimos registros con tabs (8 columnas) y Accesos rápidos (4 columnas) */}
@@ -482,7 +481,7 @@ export default function Home() {
       <Stack spacing={3}>
         <Box>
           <Typography variant="h4" color="primary">
-            Bienvenido, <b>{user?.nombre_usuario}</b>
+            Bienvenido, <b>{user?.nombreUsuario || user?.nombre_usuario}</b>
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
             Panel de resultados médicos
@@ -517,8 +516,8 @@ export default function Home() {
         </Card>
 
         {/* Accesos rápidos */}
-        <Grid container spacing={3}>
-          <Grid item xs={12} md={6}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
             <Card>
               <CardContent>
                 <Stack spacing={2}>
@@ -540,9 +539,9 @@ export default function Home() {
                 </Stack>
               </CardContent>
             </Card>
-          </Grid>
+          </div>
 
-          <Grid item xs={12} md={6}>
+          <div>
             <Card>
               <CardContent>
                 <Stack spacing={2}>
@@ -566,8 +565,8 @@ export default function Home() {
                 </Stack>
               </CardContent>
             </Card>
-          </Grid>
-        </Grid>
+          </div>
+        </div>
 
         {/* Búsqueda de exámenes */}
         <Card>
@@ -668,7 +667,7 @@ export default function Home() {
   return (
     <Stack spacing={3}>
       <Typography variant="h4" color="primary">
-        Bienvenido, <b>{user?.nombre_usuario}</b>
+        Bienvenido, <b>{user?.nombreUsuario || user?.nombre_usuario}</b>
       </Typography>
       <Card>
         <CardContent>

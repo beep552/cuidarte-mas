@@ -78,7 +78,7 @@ export default function ExamenForm({ onSuccess, examenId }) {
 
           // Subir documentos pendientes si hay
           if (pendingFiles.length > 0 && nuevoExamenId) {
-            await uploadPendingFiles(nuevoExamenId, values.paciente_id);
+            await uploadPendingFiles(nuevoExamenId);
           }
         }
         formik.resetForm();
@@ -136,13 +136,13 @@ export default function ExamenForm({ onSuccess, examenId }) {
     }
   };
 
-  const uploadPendingFiles = async (examenIdToUse, pacienteId) => {
-    if (pendingFiles.length === 0 || !pacienteId) return;
+  const uploadPendingFiles = async (examenIdToUse) => {
+    if (pendingFiles.length === 0) return;
 
     const formData = new FormData();
     formData.append("documento", pendingFiles[0]);
     formData.append("examen_medico_id", examenIdToUse);
-    formData.append("paciente_id", pacienteId);
+    // HAL-22: el backend deriva paciente_id del examen; no se envía del cliente.
 
     setUploading(true);
     try {
@@ -156,8 +156,12 @@ export default function ExamenForm({ onSuccess, examenId }) {
       if (examenIdToUse) {
         void loadDocumentos();
       }
-    } catch {
-      toast.error("Error al subir documento");
+    } catch (error) {
+      toast.error(
+        error?.response?.data?.glosa ||
+          error?.response?.data?.error ||
+          "Error al subir documento"
+      );
     } finally {
       setUploading(false);
     }
@@ -220,7 +224,7 @@ export default function ExamenForm({ onSuccess, examenId }) {
     const formData = new FormData();
     formData.append("documento", acceptedFiles[0]);
     formData.append("examen_medico_id", examenId);
-    formData.append("paciente_id", formik.values.paciente_id);
+    // HAL-22: el backend deriva paciente_id del examen; no se envía del cliente.
 
     setUploading(true);
     try {
@@ -231,8 +235,12 @@ export default function ExamenForm({ onSuccess, examenId }) {
       });
       toast.success("Documento subido exitosamente");
       void loadDocumentos();
-    } catch {
-      toast.error("Error al subir documento");
+    } catch (error) {
+      toast.error(
+        error?.response?.data?.glosa ||
+          error?.response?.data?.error ||
+          "Error al subir documento"
+      );
     } finally {
       setUploading(false);
     }
@@ -250,7 +258,21 @@ export default function ExamenForm({ onSuccess, examenId }) {
       "image/png": [".png"],
     },
     multiple: false,
+    maxSize: 10 * 1024 * 1024,
+    maxFiles: 1,
     disabled: uploading || loading,
+    onDropRejected: (fileRejections) => {
+      const errors = fileRejections[0]?.errors ?? [];
+      if (errors.some((e) => e.code === "file-too-large")) {
+        toast.error("El archivo no puede exceder 10 MB");
+      } else if (errors.some((e) => e.code === "file-invalid-type")) {
+        toast.error("Formato no permitido. Solo PDF, JPG/JPEG o PNG");
+      } else {
+        toast.error(
+          errors.map((e) => e.message).join(". ") || "Archivo rechazado"
+        );
+      }
+    },
   });
 
   useEffect(() => {

@@ -47,7 +47,14 @@ const registerSchema = yup.object().shape({
   rut: yup
     .string()
     .optional()
-    .test("rut-dv", (valor) => (valor == null ? true : validarRut(valor).motivo)),
+    .test("rut-dv", function validarDigitoVerificador(valor) {
+      if (valor == null) return true;
+      const resultado = validarRut(valor);
+      return (
+        resultado.valido ||
+        this.createError({ message: resultado.motivo || "El RUT no es válido" })
+      );
+    }),
 });
 
 module.exports = {

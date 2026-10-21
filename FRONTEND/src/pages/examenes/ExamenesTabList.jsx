@@ -40,7 +40,11 @@ export default function ExamenesTabList({ items, onLoad, onEdit }) {
         setExamenToDelete(null);
         onLoad();
       } catch (error) {
-        toast.error("Error al eliminar el examen: " + error.message);
+        toast.error(
+          error?.response?.data?.glosa ||
+            error?.response?.data?.error ||
+            "Error al eliminar el examen"
+        );
       }
     }
   };

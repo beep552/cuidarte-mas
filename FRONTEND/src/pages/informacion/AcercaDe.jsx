@@ -66,7 +66,7 @@ export default function AcercaDe() {
                 Nuestras Características Principales
               </Typography>
               <Grid container spacing={3}>
-                <Grid item xs={12} md={4}>
+                <Grid size={{ xs: 12, md: 4 }}>
                   <Card variant="outlined" sx={{ height: "100%" }}>
                     <CardContent>
                       <Stack spacing={2} alignItems="center" textAlign="center">
@@ -86,7 +86,7 @@ export default function AcercaDe() {
                   </Card>
                 </Grid>
 
-                <Grid item xs={12} md={4}>
+                <Grid size={{ xs: 12, md: 4 }}>
                   <Card variant="outlined" sx={{ height: "100%" }}>
                     <CardContent>
                       <Stack spacing={2} alignItems="center" textAlign="center">
@@ -106,7 +106,7 @@ export default function AcercaDe() {
                   </Card>
                 </Grid>
 
-                <Grid item xs={12} md={4}>
+                <Grid size={{ xs: 12, md: 4 }}>
                   <Card variant="outlined" sx={{ height: "100%" }}>
                     <CardContent>
                       <Stack spacing={2} alignItems="center" textAlign="center">
@@ -135,7 +135,7 @@ export default function AcercaDe() {
                 Funcionalidades del Sistema
               </Typography>
               <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
+                <Grid size={{ xs: 12, md: 6 }}>
                   <Stack spacing={1}>
                     <Chip
                       label="Gestión de Pacientes"
@@ -175,7 +175,7 @@ export default function AcercaDe() {
                     />
                   </Stack>
                 </Grid>
-                <Grid item xs={12} md={6}>
+                <Grid size={{ xs: 12, md: 6 }}>
                   <Stack spacing={1}>
                     <Chip
                       label="Control de Acceso por Roles"
@@ -225,7 +225,7 @@ export default function AcercaDe() {
                 Roles del Sistema
               </Typography>
               <Grid container spacing={2}>
-                <Grid item xs={12} md={4}>
+                <Grid size={{ xs: 12, md: 4 }}>
                   <Card variant="outlined">
                     <CardContent>
                       <Typography
@@ -242,7 +242,7 @@ export default function AcercaDe() {
                     </CardContent>
                   </Card>
                 </Grid>
-                <Grid item xs={12} md={4}>
+                <Grid size={{ xs: 12, md: 4 }}>
                   <Card variant="outlined">
                     <CardContent>
                       <Typography
@@ -259,7 +259,7 @@ export default function AcercaDe() {
                     </CardContent>
                   </Card>
                 </Grid>
-                <Grid item xs={12} md={4}>
+                <Grid size={{ xs: 12, md: 4 }}>
                   <Card variant="outlined">
                     <CardContent>
                       <Typography

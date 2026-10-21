@@ -47,6 +47,10 @@ function verifyPassword(plain, stored) {
       N: Number.parseInt(nStr, 10),
       r: Number.parseInt(rStr, 10),
       p: Number.parseInt(pStr, 10),
+      // Mismo límite que hashPassword: scrypt con N=32768, r=8 necesita
+      // ~32 MiB y el valor por defecto de Node (32 MiB) lo rechaza con
+      // ERR_CRYPTO_INVALID_SCRYPT_PARAMS.
+      maxmem: PARAMS.maxmem,
     };
     if (
       !Number.isFinite(params.N) ||

@@ -3,7 +3,7 @@ import {
   PASSWORD_MIN_LENGTH,
   PASSWORD_MAX_LENGTH,
   validarPoliticaContrasena,
-} from "../../utils/passwordPolicy";
+} from "../utils/passwordPolicy";
 
 /**
  * HAL-12: política de contraseñas (mín. 12 + 3 de 4 categorías), reflejada

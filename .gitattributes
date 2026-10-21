@@ -1,0 +1,5 @@
+* text=auto
+# Los scripts que se ejecutan dentro de contenedores Linux (entrypoints,
+# inicialización de PostgreSQL) deben conservar finales de línea LF aunque
+# el repositorio se clone en Windows.
+*.sh text eol=lf

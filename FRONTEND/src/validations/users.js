@@ -3,7 +3,7 @@ import {
   PASSWORD_MIN_LENGTH,
   PASSWORD_MAX_LENGTH,
   validarPoliticaContrasena,
-} from "../../utils/passwordPolicy";
+} from "../utils/passwordPolicy";
 
 export const updateUsuarioSchema = yup.object().shape({
   correo: yup
